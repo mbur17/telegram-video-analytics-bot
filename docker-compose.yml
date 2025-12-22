@@ -1,0 +1,153 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: video_analytics_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-admin_password}
+      POSTGRES_DB: ${POSTGRES_DB:-video_analytics}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-admin} -d ${POSTGRES_DB:-video_analytics}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    container_name: ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-network
+    command: [ "serve"]
+    restart: unless-stopped
+    # Uncomment for GPU support (NVIDIA)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  ollama-setup:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    container_name: ollama_setup
+    depends_on:
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app-network
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      apt-get update && apt-get install -y curl &&
+      echo 'Waiting for Ollama...' &&
+      until curl -sf http://ollama:11434/api/tags; do sleep 2; done &&
+      echo 'Pulling ${OLLAMA_MODEL:-sqlcoder:latest} model...' &&
+      ollama pull ${OLLAMA_MODEL:-sqlcoder:latest} &&
+      echo 'Model downloaded successfully!'
+      "
+    restart: "no"
+
+  migrations:
+    build: .
+    container_name: migrations
+    environment:
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:-admin}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-admin_password}
+      POSTGRES_DB: ${POSTGRES_DB:-video_analytics}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    networks:
+      - app-network
+    command: >
+      sh -c "
+      echo 'Running migrations...' &&
+      alembic upgrade head &&
+      echo 'Migrations completed!'
+      "
+    restart: "no"
+
+  data-loader:
+    build: .
+    container_name: data_loader
+    environment:
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:-admin}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-admin_password}
+      POSTGRES_DB: ${POSTGRES_DB:-video_analytics}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    volumes:
+      - ./data:/app/data
+    networks:
+      - app-network
+    command: >
+      sh -c "
+      if [ -f /app/data/videos.json ]; then
+        echo 'Loading data from videos.json...' &&
+        python -m scripts.load_data &&
+        echo 'Data loaded successfully!';
+      else
+        echo 'WARNING: /app/data/videos.json not found. Skipping data load.';
+      fi
+      "
+    restart: "no"
+
+  bot:
+    build: .
+    container_name: video_analytics_bot
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      POSTGRES_READONLY_USER: ${POSTGRES_READONLY_USER:-readonly_user}
+      POSTGRES_READONLY_PASSWORD: ${POSTGRES_READONLY_PASSWORD:-readonly_password}
+      POSTGRES_DB: ${POSTGRES_DB:-video_analytics}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-sqlcoder:latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      ollama-setup:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      data-loader:
+        condition: service_completed_successfully
+    networks:
+      - app-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  ollama_data:
+
+networks:
+  app-network:
+    driver: bridge
