@@ -28,7 +28,8 @@ async def cmd_start(message: Message):
         '• Сколько всего видео есть в системе?\n'
         '• Сколько видео набрало больше 100000 просмотров?\n'
         '• На сколько просмотров выросли все видео 28 ноября 2025?\n'
-        '• Сколько видео получали новые просмотры 27 ноября 2025?'
+        '• Сколько видео получали новые просмотры 27 ноября 2025?\n'
+        'Узнать больше /help'
     )
 
 
@@ -59,7 +60,7 @@ async def process_query(message: Message):
         logger.info(f'User query from {message.from_user.id}: {user_query}')
         sql_query = await llm_processor.text_to_sql(user_query)
         result = await db.execute_raw_query(sql_query)
-        await message.answer(f'Результат: {result}')
+        await message.answer(f'{result}')
         logger.info(f'Query result: {result}')
 
     except ValueError as e:

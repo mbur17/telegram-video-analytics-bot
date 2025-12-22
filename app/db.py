@@ -22,15 +22,16 @@ class Database:
         self.engine: AsyncEngine | None = None
         self.session_factory: async_sessionmaker[AsyncSession] | None = None
 
-    def init(self):
-        """Initialize database engine and session factory."""
+    def init(self, use_admin: bool = False):
         if self.engine is not None:
             return
-        logger.info(
-            f'Connecting to database: {settings.DATABASE_URL.split("@")[-1]}'
+        database_url = (
+            settings.DATABASE_URL_ADMIN if use_admin
+            else settings.DATABASE_URL_READONLY
         )
+        logger.info(f'Connecting to database (admin={use_admin})')
         self.engine = create_async_engine(
-            settings.DATABASE_URL,
+            database_url,
             echo=False,
             pool_pre_ping=True,
             pool_size=10,
@@ -43,17 +44,15 @@ class Database:
             autoflush=False,
             autocommit=False,
         )
-        logger.info("Database connection initialized")
+        logger.info('Database connection initialized')
 
     async def close(self):
-        """Close database connections."""
         if self.engine:
             await self.engine.dispose()
             logger.info('Database connection closed')
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[AsyncSession, None]:
-        """Get a database session."""
         if self.session_factory is None:
             raise RuntimeError('Database not initialized. Call init() first.')
         async with self.session_factory() as session:
@@ -71,7 +70,6 @@ class Database:
             row = result.fetchone()
             if row is None:
                 return 0
-            # Return the first column of the first row
             return int(row[0]) if row[0] is not None else 0
 
 
