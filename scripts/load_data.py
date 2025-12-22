@@ -40,7 +40,7 @@ async def load_json_data(json_path: Path):
         data = json.load(f)
     videos_data = data.get('videos', data) if isinstance(data, dict) else data
     logger.info(f'Found {len(videos_data)} videos in JSON')
-    db.init()
+    db.init(use_admin=True)
     async with db.session() as session:
         video_count = 0
         snapshot_count = 0
