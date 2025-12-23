@@ -4,7 +4,7 @@ Telegram-бот для аналитики видео с использовани
 
 ## Технологии
 
-- [Ollama](https://ollama.com) - локальный LLM inference
+- [Ollama](https://ollama.com) - LLM inference
 - [Qwen3-Coder](https://github.com/QwenLM/Qwen3-Coder) - модель для генерации SQL
 - [Aiogram](https://github.com/aiogram/aiogram) - Telegram Bot framework
 - [SQLAlchemy](https://www.sqlalchemy.org/) - SQL toolkit для Python
@@ -21,6 +21,7 @@ app/
 │   ├── bot.py
 │   ├── config.py
 │   ├── db.py
+│   ├── const.py
 │   ├── llm_processor.py
 │   └── models.py
 ├── scripts/
