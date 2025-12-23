@@ -9,7 +9,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-# Database schema description for SQLCoder
 DATABASE_SCHEMA = '''
 CREATE TABLE videos (
     id VARCHAR(36) PRIMARY KEY,  -- UUID
@@ -37,23 +36,20 @@ CREATE TABLE video_snapshots (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
-
--- Indexes
-CREATE INDEX idx_videos_creator_id ON videos(creator_id);
-CREATE INDEX idx_videos_video_created_at ON videos(video_created_at);
-CREATE INDEX idx_video_snapshots_video_id ON video_snapshots(video_id);
-CREATE INDEX idx_video_snapshots_created_at ON video_snapshots(created_at);
-CREATE INDEX idx_video_snapshots_video_created ON video_snapshots(video_id, created_at);
 '''  # noqa: E501
 
 
 class LLMProcessor:
-    """Process natural language queries using Ollama + SQLCoder."""
+    """Process natural language queries using Ollama + qwen3-coder."""
 
     def __init__(self):
         self.model = settings.OLLAMA_MODEL
         self.base_url = settings.OLLAMA_BASE_URL
-        self.client = AsyncClient(host=self.base_url)
+        self.headers = {'Authorization': f'Bearer {settings.OLLAMA_API_KEY}'}
+        self.client = AsyncClient(
+            host=self.base_url,
+            headers=self.headers
+        )
         logger.info(f'Using Ollama at {self.base_url} with model {self.model}')
 
     def _translate_russian_dates(self, query: str) -> str:
@@ -74,55 +70,34 @@ class LLMProcessor:
         query_translated = self._translate_russian_dates(user_query)
 
         prompt = f'''
-### Task
-Generate a SQL query to answer the following question: `{query_translated}`
-The question may be written in Russian.
-First, mentally translate it to English, then generate SQL.
+### Instruction:
+Your task is to generate a valid PostgreSQL query to answer the given question based on the provided database schema.
 
-### Database Schema
+### Input:
+Generate a SQL query to answer this question: `{query_translated}`
+
+Database schema:
 {DATABASE_SCHEMA}
 
-### Instructions
-- Return ONLY the SQL query, nothing else
+Important rules:
+- Return ONLY a valid PostgreSQL SELECT query
 - The query must return a single number
-- Use COALESCE(SUM(...), 0) or COALESCE(COUNT(...), 0) to handle NULL values
-- For date filtering, use DATE(created_at) = 'YYYY-MM-DD' format
-- creator_id and video_id are strings, use single quotes: 'abc123'
-- Use table "videos" for final statistics (total views, likes, etc)
-- Use table "video_snapshots" for growth/delta queries
-- For "how many videos received views on date X": SELECT COUNT(DISTINCT video_id) FROM video_snapshots WHERE DATE(created_at) = 'X' AND delta_views_count > 0
-- For "how much did views grow on date X": SELECT COALESCE(SUM(delta_views_count), 0) FROM video_snapshots WHERE DATE(created_at) = 'X'
-- Never use JOIN unless explicitly required
-- Only use tables listed in the schema
-- Do not invent columns
+- Use COALESCE(SUM(...), 0) or COALESCE(COUNT(...), 0) for NULL safety
+- For date filtering use: DATE(created_at) = 'YYYY-MM-DD'
+- creator_id and video_id are VARCHAR, use single quotes
+- Use "videos" table for aggregated statistics
+- Use "video_snapshots" table for growth/delta queries
 
-### Examples
-Question: "How many videos are there?"
-SQL: SELECT COUNT(*) FROM videos
-
-Question: "How many videos got more than 100000 views?"
-SQL: SELECT COUNT(*) FROM videos WHERE views_count > 100000
-
-Question: "How much did views grow on 2025-11-28?"
-SQL: SELECT COALESCE(SUM(delta_views_count), 0) FROM video_snapshots WHERE DATE(created_at) = '2025-11-28'
-
-Question: "How many videos received new views on 2025-11-27?"
-SQL: SELECT COUNT(DISTINCT video_id) FROM video_snapshots WHERE DATE(created_at) = '2025-11-27' AND delta_views_count > 0
-
-### SQL Query
+### Response:
 '''  # noqa: E501
-
         return prompt
 
     def _clean_sql_response(self, sql: str) -> str:
-        # Remove markdown and llama tokens
         sql = re.sub(
             r'```(?:sql)?|</?s>', '', sql, flags=re.IGNORECASE
         ).strip()
         match = re.search(
-            r'(SELECT\b.*?)(?:\n\s*[A-Z][a-z].*|$)',
-            sql,
-            flags=re.IGNORECASE | re.DOTALL,
+            r'(SELECT\b.*)', sql, flags=re.IGNORECASE | re.DOTALL
         )
         if not match:
             return ''
@@ -161,10 +136,7 @@ SQL: SELECT COUNT(DISTINCT video_id) FROM video_snapshots WHERE DATE(created_at)
             response = await self.client.generate(
                 model=self.model,
                 prompt=prompt,
-                options={
-                    'temperature': 0.1,
-                    'top_p': 0.9,
-                }
+                stream=False
             )
             logger.warning('RAW LLM RESPONSE:\n%s', response)
             raw_text = response.get('response', '')
